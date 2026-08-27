@@ -1,0 +1,73 @@
+
+
+-- Таблица сотрудников (пользователей)
+CREATE TABLE employees (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'auditor'
+);
+
+-- Справочник типов уязвимостей
+CREATE TABLE vulnerability_types (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    base_risk_score INTEGER NOT NULL
+);
+
+-- Журнал инцидентов
+CREATE TABLE incidents (
+    id SERIAL PRIMARY KEY,
+    employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    vulnerability_type_id INTEGER REFERENCES vulnerability_types(id) ON DELETE RESTRICT,
+    description TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'Зафиксирован',
+    severity_score NUMERIC, -- Будет вычисляться автоматически
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Функция для расчета уровня критичности (базовый риск * коэффициент)
+CREATE OR REPLACE FUNCTION calculate_severity()
+RETURNS TRIGGER AS $$
+DECLARE
+    base_score INTEGER;
+BEGIN
+    -- Получаем базовый риск из справочника
+    SELECT base_risk_score INTO base_score
+    FROM vulnerability_types
+    WHERE id = NEW.vulnerability_type_id;
+
+    -- Допустим, коэффициент влияния = 1.5
+    NEW.severity_score := base_score * 1.5;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Триггер, который срабатывает ДО вставки новой записи
+CREATE TRIGGER set_incident_severity
+BEFORE INSERT ON incidents
+FOR EACH ROW
+EXECUTE FUNCTION calculate_severity();
+
+-- Добавляем тестовых сотрудников с теми самыми ID, которые зашиты в React (101 и 102)
+INSERT INTO employees (id, username, password_hash, role) VALUES 
+(101, 'logist_a', 'dummy_hash', 'user'),
+(102, 'auditor_b', 'dummy_hash', 'auditor')
+ON CONFLICT (id) DO NOTHING;
+
+-- На всякий случай добавим и типы уязвимостей, чтобы на них тоже не ругался внешний ключ
+INSERT INTO vulnerability_types (id, name, base_risk_score) VALUES 
+(1, 'Срыв электронной пломбы', 8),
+(2, 'Нарушение температурного режима', 7),
+(3, 'Отклонение от маршрута', 9),
+(4, 'Незапланированная остановка', 6)
+ON CONFLICT (id) DO NOTHING;
+
+-- Включаем встроенное расширение для шифрования
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Обновляем пароли наших тестовых пользователей на '12345', хэшируя их через bcrypt (алгоритм 'bf')
+UPDATE employees 
+SET password_hash = crypt('12345', gen_salt('bf'))
+WHERE id IN (101, 102);

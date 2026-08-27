@@ -1,0 +1,31 @@
+name: React Frontend CI
+
+# Запускать этот сценарий при каждом push в ветку main (или master)
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Скачиваем код из репозитория
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    # 2. Устанавливаем Node.js
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+
+    # 3. Устанавливаем зависимости и пробуем собрать проект (наш "тест")
+    # ВАЖНО: замени 'supply-chain-sec-spa' на точное название папки твоего фронтенда
+    - name: Install dependencies and Build
+      run: |
+        cd supply-chain-sec-spa
+        npm ci
+        npm run build
