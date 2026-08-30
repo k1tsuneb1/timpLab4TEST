@@ -13,12 +13,10 @@ export default function Dashboard() {
   const [incidents, setIncidents] = useState([]);
   const navigate = useNavigate();
 
-  // --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ФИЛЬТРА И ПАГИНАЦИИ ---
   const [filterStatus, setFilterStatus] = useState('Все');
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(5); // По 5 строк на страницу
+  const [rowsPerPage, setRowsPerPage] = useState(5);
   
-  // Достаем роль из токена для кнопки удаления
   const token = localStorage.getItem('token');
   let userRole = '';
   if (token) {
@@ -31,11 +29,8 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    // Загружаем все инциденты при монтировании компонента
     api.get('/incidents')
-      .then(response => {
-        setIncidents(response.data);
-      })
+      .then(response => setIncidents(response.data))
       .catch(error => {
         console.error('Ошибка загрузки данных:', error);
         toast.error('Не удалось загрузить инциденты');
@@ -55,7 +50,6 @@ export default function Dashboard() {
   const handleDelete = async (id) => {
     const isConfirmed = window.confirm('Вы действительно хотите безвозвратно удалить этот инцидент?');
     if (!isConfirmed) return;
-
     try {
       await api.delete(`/incidents/${id}`);
       toast.success('Инцидент удален');
@@ -64,44 +58,34 @@ export default function Dashboard() {
       toast.error(error.response?.data?.error || 'Ошибка при удалении инцидента');
     }
   };
-
-  // --- ЛОГИКА ФИЛЬТРАЦИИ И ПАГИНАЦИИ ---
   
-  // 1. Сначала фильтруем массив по выбранному статусу
   const filteredIncidents = incidents.filter(incident => 
     filterStatus === 'Все' ? true : incident.status === filterStatus
   );
 
-  // 2. Затем "отрезаем" нужный кусок массива для текущей страницы
   const paginatedIncidents = filteredIncidents.slice(
     page * rowsPerPage, 
     page * rowsPerPage + rowsPerPage
   );
 
-  // Обработчики изменения фильтра и страниц
   const handleFilterChange = (event) => {
     setFilterStatus(event.target.value);
-    setPage(0); // При смене фильтра всегда возвращаемся на первую страницу
+    setPage(0);
   };
 
-  const handleChangePage = (event, newPage) => {
-    setPage(newPage);
-  };
-
+  const handleChangePage = (event, newPage) => setPage(newPage);
   const handleChangeRowsPerPage = (event) => {
     setRowsPerPage(parseInt(event.target.value, 10));
     setPage(0);
   };
 
   return (
-    <Box sx={{ padding: 4 }}>
-      <Typography variant="h4" gutterBottom fontWeight="bold">
-        Панель мониторинга инцидентов
+    <Box>
+      <Typography variant="h4" gutterBottom fontWeight="bold" sx={{ mb: 3 }}>
+        Мониторинг инцидентов
       </Typography>
 
-      {/* ВЕРХНЯЯ ПАНЕЛЬ С КНОПКАМИ И ФИЛЬТРОМ */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
-        
         <Box sx={{ display: 'flex', gap: 2 }}>
           <Button variant="contained" color="primary" onClick={() => navigate('/incidents/new')}>
             + Новый инцидент
@@ -113,30 +97,23 @@ export default function Dashboard() {
           )}
         </Box>
 
-        {/* НОВЫЙ БЛОК: Выпадающий список фильтра */}
-        <FormControl size="small" sx={{ minWidth: 200, bgcolor: 'white' }}>
+        <FormControl size="small" sx={{ minWidth: 200, bgcolor: 'white', borderRadius: 1 }}>
           <InputLabel>Фильтр по статусу</InputLabel>
-          <Select
-            value={filterStatus}
-            label="Фильтр по статусу"
-            onChange={handleFilterChange}
-          >
+          <Select value={filterStatus} label="Фильтр по статусу" onChange={handleFilterChange}>
             <MenuItem value="Все">Все статусы</MenuItem>
             <MenuItem value="Зафиксирован">Зафиксирован</MenuItem>
             <MenuItem value="В обработке">В обработке</MenuItem>
             <MenuItem value="Решен">Решен</MenuItem>
           </Select>
         </FormControl>
-
       </Box>
 
-      <TableContainer component={Paper} elevation={3}>
-        <Table sx={{ minWidth: 650 }} aria-label="incidents table">
+      <TableContainer component={Paper} elevation={2} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <Table sx={{ minWidth: 650 }}>
           <TableHead sx={{ backgroundColor: '#f5f5f5' }}>
             <TableRow>
-              <TableCell sx={{ fontWeight: 'bold' }}>ID</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>Описание уязвимости</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }}>Статус</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', width: '180px' }}>Статус</TableCell>
               <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Угроза</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>Дата</TableCell>
               <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Действия</TableCell>
@@ -144,11 +121,8 @@ export default function Dashboard() {
           </TableHead>
           
           <TableBody>
-            {/* ИСПОЛЬЗУЕМ paginatedIncidents ВМЕСТО ВСЕХ incidents */}
             {paginatedIncidents.map((incident) => (
               <TableRow key={incident.id} hover>
-                <TableCell>{incident.id}</TableCell>
-                
                 <TableCell sx={{ maxWidth: '250px' }}>
                   <Tooltip title={incident.description} arrow placement="top">
                     <Typography 
@@ -167,12 +141,26 @@ export default function Dashboard() {
                 </TableCell>
                 
                 <TableCell>
-                  <Typography variant="body2" fontWeight="bold" color={
-                    incident.status === 'Решен' ? 'success.main' : 
-                    incident.status === 'В обработке' ? 'warning.main' : 'error.main'
-                  }>
-                    {incident.status}
-                  </Typography>
+                  {/* ЗАМЕНИЛИ ТЕКСТ НА ВЫПАДАЮЩИЙ СПИСОК */}
+                  <FormControl size="small" fullWidth>
+                    <Select
+                      value={incident.status}
+                      onChange={(e) => updateStatus(incident.id, e.target.value)}
+                      disabled={userRole === 'user'} // Обычный логист не может менять статус
+                      sx={{ 
+                        fontSize: '0.875rem',
+                        fontWeight: 'bold',
+                        bgcolor: incident.status === 'Решен' ? '#e8f5e9' : 
+                                 incident.status === 'В обработке' ? '#fff3e0' : '#ffebee',
+                        color: incident.status === 'Решен' ? 'success.main' : 
+                               incident.status === 'В обработке' ? 'warning.main' : 'error.main'
+                      }}
+                    >
+                      <MenuItem value="Зафиксирован">Зафиксирован</MenuItem>
+                      <MenuItem value="В обработке">В обработке</MenuItem>
+                      <MenuItem value="Решен">Решен</MenuItem>
+                    </Select>
+                  </FormControl>
                 </TableCell>
                 
                 <TableCell align="center">
@@ -189,31 +177,22 @@ export default function Dashboard() {
                 </TableCell>
                 
                 <TableCell align="center">
-                  <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-                    {incident.status === 'Зафиксирован' && (
-                      <Button variant="outlined" color="warning" size="small" onClick={() => updateStatus(incident.id, 'В обработке')}>В работу</Button>
-                    )}
-                    {incident.status === 'В обработке' && (
-                      <Button variant="contained" color="success" size="small" onClick={() => updateStatus(incident.id, 'Решен')}>Решить</Button>
-                    )}
-                    {incident.status === 'Решен' && (
-                      <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic', display: 'flex', alignItems: 'center' }}>Архив</Typography>
-                    )}
-                    {userRole === 'admin' && (
-                      <Button variant="text" color="error" size="small" onClick={() => handleDelete(incident.id)} sx={{ minWidth: 'auto', p: '4px 8px' }}>✕</Button>
-                    )}
-                  </Box>
+                  {/* УБРАЛИ СТАРЫЕ КНОПКИ СТАТУСА, ОСТАВИЛИ ТОЛЬКО УДАЛЕНИЕ */}
+                  {userRole === 'admin' ? (
+                    <Button variant="text" color="error" size="small" onClick={() => handleDelete(incident.id)} sx={{ minWidth: 'auto', p: '4px 8px' }}>✕</Button>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">-</Typography>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
 
-        {/* НОВЫЙ БЛОК: Пагинация (переключатель страниц) */}
         <TablePagination
           rowsPerPageOptions={[5, 10, 25]}
           component="div"
-          count={filteredIncidents.length} // Считаем отфильтрованные строки
+          count={filteredIncidents.length}
           rowsPerPage={rowsPerPage}
           page={page}
           onPageChange={handleChangePage}

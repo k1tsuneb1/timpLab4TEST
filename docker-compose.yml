@@ -1,0 +1,35 @@
+services:
+  # 1. База данных PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: sec_database
+    environment:
+      POSTGRES_DB: logSecure
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "3462"
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d/init.sql # Прокидываем твой файл
+
+  # 2. Наш C++ Бэкенд
+  backend:
+    image: sec-backend
+    container_name: sec_backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+  # 3. Наш React Фронтенд
+  frontend:
+    image: sec-frontend
+    container_name: sec_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

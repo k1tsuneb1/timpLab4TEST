@@ -7,7 +7,7 @@
 using namespace std;
 
 // Данные для подключения к твоему локальному PostgreSQL
-const string DB_CONN = "dbname=logSecure user=postgres password=3462 host=localhost port=5432";
+const string DB_CONN = "dbname=logSecure user=postgres password=3462 host=db port=5432";
 
 int main() {
     // Инициализируем приложение с поддержкой CORS (чтобы React не ругался)
@@ -303,16 +303,18 @@ int main() {
                 return crow::response(400, err);
             }
 
-            int id = body["id"].i();
+            // УДАЛИЛИ ПАРСИНГ ID
             string username = body["username"].s();
             string password = body["password"].s();
             string role = body["role"].s();
 
             pqxx::connection c(DB_CONN);
             pqxx::work w(c);
+            
+            // УДАЛИЛИ ID ИЗ ЗАПРОСА И ПАРАМЕТРОВ
             w.exec_params(
-                "INSERT INTO employees (id, username, password_hash, role) VALUES ($1, $2, crypt($3, gen_salt('bf')), $4)",
-                id, username, password, role
+                "INSERT INTO employees (username, password_hash, role) VALUES ($1, crypt($2, gen_salt('bf')), $3)",
+                username, password, role
             );
             w.commit();
 
@@ -375,13 +377,15 @@ int main() {
                     return crow::response(400, err);
                 }
 
-                int id = body["id"].i();
+                // УДАЛИЛИ ПАРСИНГ ID
                 string name = body["name"].s();
                 int base_risk = body["base_risk_score"].i();
 
                 pqxx::connection c(DB_CONN);
                 pqxx::work w(c);
-                w.exec_params("INSERT INTO vulnerability_types (id, name, base_risk_score) VALUES ($1, $2, $3)", id, name, base_risk);
+                
+                // УДАЛИЛИ ID ИЗ ЗАПРОСА И ПАРАМЕТРОВ
+                w.exec_params("INSERT INTO vulnerability_types (name, base_risk_score) VALUES ($1, $2)", name, base_risk);
                 w.commit();
 
                 crow::json::wvalue res; res["message"] = "Уязвимость добавлена";
@@ -393,6 +397,81 @@ int main() {
             }
         }
     });
+
+    // GET: Получение списка пользователей (Только для Админа)
+    CROW_ROUTE(app, "/api/users").methods(crow::HTTPMethod::GET)
+    ([](const crow::request& req) {
+        string auth_header = req.get_header_value("Authorization");
+        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") return crow::response(401, R"({"error": "Не авторизован"})");
+        try {
+            auto decoded = jwt::decode(auth_header.substr(7));
+            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
+            verifier.verify(decoded);
+            if (decoded.get_payload_claim("role").as_string() != "admin") return crow::response(403, R"({"error": "Требуются права администратора"})");
+
+            pqxx::connection c(DB_CONN);
+            pqxx::work w(c);
+            pqxx::result r = w.exec("SELECT id, username, role FROM employees ORDER BY id ASC");
+            
+            crow::json::wvalue::list user_list;
+            for (auto const& row : r) {
+                crow::json::wvalue u;
+                u["id"] = row[0].as<int>();
+                u["username"] = row[1].as<string>();
+                u["role"] = row[2].as<string>();
+                user_list.push_back(std::move(u));
+            }
+            return crow::response(200, crow::json::wvalue(user_list));
+        } catch (const std::exception& e) {
+            return crow::response(500, R"({"error": "Ошибка БД"})");
+        }
+    });
+
+    // DELETE: Удаление пользователя (Только для Админа)
+    CROW_ROUTE(app, "/api/users/<int>").methods(crow::HTTPMethod::DELETE)
+    ([](const crow::request& req, int user_id) {
+        string auth_header = req.get_header_value("Authorization");
+        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") return crow::response(401, R"({"error": "Не авторизован"})");
+        try {
+            auto decoded = jwt::decode(auth_header.substr(7));
+            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
+            verifier.verify(decoded);
+            if (decoded.get_payload_claim("role").as_string() != "admin") return crow::response(403, R"({"error": "Требуются права администратора"})");
+
+            pqxx::connection c(DB_CONN);
+            pqxx::work w(c);
+            pqxx::result r = w.exec_params("DELETE FROM employees WHERE id = $1 RETURNING id", user_id);
+            if (r.empty()) return crow::response(404, R"({"error": "Сотрудник не найден"})");
+            w.commit();
+            return crow::response(200, R"({"message": "Сотрудник удален"})");
+        } catch (const std::exception& e) {
+            // Если БД ругается на Foreign Key (сотрудник уже создал инцидент)
+            return crow::response(400, R"({"error": "Нельзя удалить сотрудника, за которым числятся инциденты"})");
+        }
+    });
+
+    // DELETE: Удаление уязвимости (Только для Админа)
+    CROW_ROUTE(app, "/api/vulnerabilities/<int>").methods(crow::HTTPMethod::DELETE)
+    ([](const crow::request& req, int vuln_id) {
+        string auth_header = req.get_header_value("Authorization");
+        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") return crow::response(401, R"({"error": "Не авторизован"})");
+        try {
+            auto decoded = jwt::decode(auth_header.substr(7));
+            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
+            verifier.verify(decoded);
+            if (decoded.get_payload_claim("role").as_string() != "admin") return crow::response(403, R"({"error": "Требуются права администратора"})");
+
+            pqxx::connection c(DB_CONN);
+            pqxx::work w(c);
+            pqxx::result r = w.exec_params("DELETE FROM vulnerability_types WHERE id = $1 RETURNING id", vuln_id);
+            if (r.empty()) return crow::response(404, R"({"error": "Уязвимость не найдена"})");
+            w.commit();
+            return crow::response(200, R"({"message": "Уязвимость удалена"})");
+        } catch (const std::exception& e) {
+            return crow::response(400, R"({"error": "Нельзя удалить уязвимость, которая используется в инцидентах"})");
+        }
+    });
+
 
     cout << "Crow сервер запущен на http://localhost:8080" << endl;
     app.port(8080).multithreaded().run();
