@@ -1,0 +1,59 @@
+-- Включаем встроенное расширение для шифрования
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Таблица сотрудников
+CREATE TABLE employees (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'auditor'
+);
+
+-- Справочник типов уязвимостей
+CREATE TABLE vulnerability_types (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    base_risk_score INTEGER NOT NULL
+);
+
+-- Журнал инцидентов
+CREATE TABLE incidents (
+    id SERIAL PRIMARY KEY,
+    employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+    vulnerability_type_id INTEGER REFERENCES vulnerability_types(id) ON DELETE RESTRICT,
+    description TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'Зафиксирован',
+    severity_score NUMERIC,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Функция для расчета уровня критичности
+CREATE OR REPLACE FUNCTION calculate_severity()
+RETURNS TRIGGER AS $$
+DECLARE
+    base_score INTEGER;
+BEGIN
+    SELECT base_risk_score INTO base_score FROM vulnerability_types WHERE id = NEW.vulnerability_type_id;
+    NEW.severity_score := base_score * 1.5;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Триггер
+CREATE TRIGGER set_incident_severity
+BEFORE INSERT ON incidents
+FOR EACH ROW
+EXECUTE FUNCTION calculate_severity();
+
+-- Добавляем типы уязвимостей (БЕЗ жестких ID)
+INSERT INTO vulnerability_types (name, base_risk_score) VALUES 
+('Срыв электронной пломбы', 8),
+('Нарушение температурного режима', 7),
+('Отклонение от маршрута', 9),
+('Незапланированная остановка', 6);
+
+-- Добавляем пользователей (логист, аудитор и админ) со стандартным паролем 12345
+INSERT INTO employees (username, password_hash, role) VALUES 
+('logist_a', crypt('12345', gen_salt('bf')), 'user'),
+('auditor_b', crypt('12345', gen_salt('bf')), 'auditor'),
+('admin_boss', crypt('12345', gen_salt('bf')), 'admin');

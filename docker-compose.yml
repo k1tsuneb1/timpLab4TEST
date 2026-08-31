@@ -11,10 +11,12 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db:/docker-entrypoint-initdb.d/init.sql # Прокидываем твой файл
+      # Убедись, что путь слева совпадает с реальным расположением твоего SQL файла
+      - ./db:/docker-entrypoint-initdb.d/
 
   # 2. Наш C++ Бэкенд
   backend:
+    build: ./Back       # <-- Добавлена директива сборки бэкенда
     image: sec-backend
     container_name: sec_backend
     ports:
@@ -24,6 +26,7 @@ services:
 
   # 3. Наш React Фронтенд
   frontend:
+    build: ./supply-chain-sec-spa      # <-- Добавлена директива сборки фронтенда
     image: sec-frontend
     container_name: sec_frontend
     ports:

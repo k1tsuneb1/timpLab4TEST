@@ -3,28 +3,29 @@ import { jwtDecode } from "jwt-decode";
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Box, 
-  Button, 
-  TextField, 
-  Typography, 
-  Paper, 
-  MenuItem,
-  Alert
+  Box, Button, TextField, Typography, Paper, MenuItem, Alert, 
+  FormControl, InputLabel, Select, OutlinedInput, Checkbox, ListItemText 
 } from '@mui/material';
 import { toast } from 'react-toastify';
 
-const statuses = ['Зафиксирован', 'В обработке', 'Решен'];
+const statuses = ['Зафиксирован', 'В работе', 'Закрыт'];
 
 export default function IncidentForm() {
   const navigate = useNavigate();
   
-  // 1. Все хуки состояния (useState) всегда должны быть в самом верху!
+  // Состояния для справочников
   const [vulnerabilities, setVulnerabilities] = useState([]);
+  const [sources, setSources] = useState([]);
+  const [measures, setMeasures] = useState([]);
+
+  // Состояния формы
   const [vulnerabilityId, setVulnerabilityId] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [trackingNumber, setTrackingNumber] = useState('');
+  const [measureIds, setMeasureIds] = useState([]);
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState(statuses[0]);
 
-  // 2. Достаем ID пользователя из токена
   let currentUserId = '';
   const token = localStorage.getItem('token');
   if (token) {
@@ -36,43 +37,51 @@ export default function IncidentForm() {
     }
   }
 
-  // 3. Загружаем список уязвимостей при открытии компонента
   useEffect(() => {
-    api.get('/vulnerabilities')
-      .then(response => {
-        setVulnerabilities(response.data);
-      })
-      .catch(error => {
-        console.error('Ошибка при загрузке уязвимостей:', error);
-        toast.error('Не удалось загрузить список уязвимостей');
-      });
+    // Загружаем все необходимые справочники параллельно
+    Promise.all([
+      api.get('/vulnerabilities'),
+      api.get('/sources'),
+      api.get('/measures')
+    ]).then(([vulnRes, sourcesRes, measuresRes]) => {
+      setVulnerabilities(vulnRes.data);
+      setSources(sourcesRes.data);
+      setMeasures(measuresRes.data);
+    }).catch(error => {
+      console.error('Ошибка при загрузке справочников:', error);
+      toast.error('Не удалось загрузить данные для формы');
+    });
   }, []);
 
-  // 4. Безопасный поиск (приводим ID к числу, чтобы не было конфликтов со строками)
   const selectedVuln = vulnerabilities.find(v => v.id === Number(vulnerabilityId));
   const calculatedSeverity = selectedVuln ? selectedVuln.base_risk_score * 1.5 : 0;
 
-  // 5. Обработчик отправки формы
+  const handleMeasuresChange = (event) => {
+    const { target: { value } } = event;
+    setMeasureIds(typeof value === 'string' ? value.split(',') : value);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
     try {
       const payload = {
         employeeId: currentUserId, 
-        vulnerabilityId: Number(vulnerabilityId), // Гарантируем, что на бэкенд уйдет число
+        vulnerabilityId: Number(vulnerabilityId),
+        sourceId: Number(sourceId),
+        trackingNumber: trackingNumber,
+        measureIds: measureIds.map(Number),
         description: description,
         status: status
       };
 
       await api.post('/incidents', payload);
-      toast.success('Инцидент успешно сохранен в базе данных!');
+      toast.success('Инцидент успешно сохранен!');
       navigate('/dashboard');
 
     } catch (error) {
       console.error('Ошибка отправки:', error);
-      toast.error(
-        error.response?.data?.error || 'Произошла ошибка при связи с сервером'
-      );
+      toast.error(error.response?.data?.error || 'Произошла ошибка при связи с сервером');
     }
   };
 
@@ -87,6 +96,31 @@ export default function IncidentForm() {
         </Typography>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', sm: 'row' } }}>
+            <TextField 
+              label="Трек-номер груза" 
+              value={trackingNumber} 
+              onChange={(e) => setTrackingNumber(e.target.value)} 
+              variant="outlined" 
+              fullWidth
+            />
+
+            <TextField 
+              select 
+              label="Источник информации" 
+              value={sourceId} 
+              onChange={(e) => setSourceId(e.target.value)} 
+              variant="outlined" 
+              required
+              fullWidth
+            >
+              {sources.length === 0 && <MenuItem disabled value="">Загрузка...</MenuItem>}
+              {sources.map((src) => (
+                <MenuItem key={src.id} value={src.id}>{src.name}</MenuItem>
+              ))}
+            </TextField>
+          </Box>
 
           <TextField 
             select 
@@ -96,17 +130,33 @@ export default function IncidentForm() {
             variant="outlined" 
             required
           >
-            {/* Добавляем пустой пункт по умолчанию на случай, если данные еще грузятся */}
-            {vulnerabilities.length === 0 && (
-               <MenuItem disabled value="">Загрузка...</MenuItem>
-            )}
-            
+            {vulnerabilities.length === 0 && <MenuItem disabled value="">Загрузка...</MenuItem>}
             {vulnerabilities.map((vuln) => (
               <MenuItem key={vuln.id} value={vuln.id}>
                 {vuln.name} (Риск: {vuln.base_risk_score})
               </MenuItem>
             ))}
           </TextField>
+
+          <FormControl fullWidth>
+            <InputLabel>Принятые меры (опционально)</InputLabel>
+            <Select
+              multiple
+              value={measureIds}
+              onChange={handleMeasuresChange}
+              input={<OutlinedInput label="Принятые меры (опционально)" />}
+              renderValue={(selected) => 
+                measures.filter(m => selected.includes(m.id)).map(m => m.name).join(', ')
+              }
+            >
+              {measures.map((measure) => (
+                <MenuItem key={measure.id} value={measure.id}>
+                  <Checkbox checked={measureIds.indexOf(measure.id) > -1} />
+                  <ListItemText primary={measure.name} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
           <TextField
             label="Подробное описание инцидента"
@@ -142,19 +192,10 @@ export default function IncidentForm() {
           )}
 
           <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-            <Button 
-              type="submit" 
-              variant="contained" 
-              color="error" 
-              size="large"
-            >
+            <Button type="submit" variant="contained" color="error" size="large">
               Зарегистрировать инцидент
             </Button>
-            <Button 
-              variant="outlined" 
-              size="large"
-              onClick={() => navigate('/dashboard')}
-            >
+            <Button variant="outlined" size="large" onClick={() => navigate('/dashboard')}>
               Отмена
             </Button>
           </Box>

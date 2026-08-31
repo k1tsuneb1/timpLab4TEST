@@ -85,3 +85,10 @@ INSERT INTO employees (username, password_hash, role, firstname, lastname) VALUE
 ('logist_a', crypt('12345', gen_salt('bf')), 'user', 'Иван', 'Логистов'),
 ('auditor_b', crypt('12345', gen_salt('bf')), 'auditor', 'Анна', 'Аудиторова'),
 ('admin_boss', crypt('12345', gen_salt('bf')), 'admin', 'Петр', 'Админов');
+
+INSERT INTO sources (source_name) VALUES 
+('Диспетчерская служба'),
+('Мониторинг трекера'),
+('Система контроля доступа'),
+('Водитель ТС'),
+('Аудит безопасности');

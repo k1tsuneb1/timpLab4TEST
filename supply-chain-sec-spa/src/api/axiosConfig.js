@@ -2,7 +2,7 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 
 const api = axios.create({
-  baseURL: 'http://localhost:8080/api',
+  baseURL: '/api',
 });
 
 // 1. Перехватчик ЗАПРОСОВ (прикрепляет токен, если он есть)

@@ -102,18 +102,20 @@ export default function Dashboard() {
           <Select value={filterStatus} label="Фильтр по статусу" onChange={handleFilterChange}>
             <MenuItem value="Все">Все статусы</MenuItem>
             <MenuItem value="Зафиксирован">Зафиксирован</MenuItem>
-            <MenuItem value="В обработке">В обработке</MenuItem>
-            <MenuItem value="Решен">Решен</MenuItem>
+            <MenuItem value="В работе">В работе</MenuItem>
+            <MenuItem value="Закрыт">Закрыт</MenuItem>
           </Select>
         </FormControl>
       </Box>
 
       <TableContainer component={Paper} elevation={2} sx={{ borderRadius: 2, overflow: 'hidden' }}>
-        <Table sx={{ minWidth: 650 }}>
+        <Table sx={{ minWidth: 850 }}>
           <TableHead sx={{ backgroundColor: '#f5f5f5' }}>
             <TableRow>
-              <TableCell sx={{ fontWeight: 'bold' }}>Описание уязвимости</TableCell>
-              <TableCell sx={{ fontWeight: 'bold', width: '180px' }}>Статус</TableCell>
+              <TableCell sx={{ fontWeight: 'bold' }}>Трек-номер</TableCell>
+              <TableCell sx={{ fontWeight: 'bold' }}>Уязвимость</TableCell>
+              <TableCell sx={{ fontWeight: 'bold' }}>Сотрудник</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', width: '150px' }}>Статус</TableCell>
               <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Угроза</TableCell>
               <TableCell sx={{ fontWeight: 'bold' }}>Дата</TableCell>
               <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Действия</TableCell>
@@ -123,42 +125,49 @@ export default function Dashboard() {
           <TableBody>
             {paginatedIncidents.map((incident) => (
               <TableRow key={incident.id} hover>
-                <TableCell sx={{ maxWidth: '250px' }}>
+                
+                <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>
+                  {incident.tracking_number}
+                </TableCell>
+
+                <TableCell sx={{ maxWidth: '200px' }}>
                   <Tooltip title={incident.description} arrow placement="top">
                     <Typography 
                       variant="body2" 
                       color="primary" 
                       sx={{ 
-                        cursor: 'pointer', display: '-webkit-box', overflow: 'hidden',
-                        WebkitBoxOrient: 'vertical', WebkitLineClamp: 2,
+                        cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         '&:hover': { textDecoration: 'underline' }
                       }}
                       onClick={() => navigate(`/incidents/${incident.id}`)}
                     >
-                      {incident.description}
+                      {incident.vulnerability}
                     </Typography>
                   </Tooltip>
                 </TableCell>
+
+                <TableCell>
+                  <Typography variant="body2">{incident.reporter}</Typography>
+                </TableCell>
                 
                 <TableCell>
-                  {/* ЗАМЕНИЛИ ТЕКСТ НА ВЫПАДАЮЩИЙ СПИСОК */}
                   <FormControl size="small" fullWidth>
                     <Select
                       value={incident.status}
                       onChange={(e) => updateStatus(incident.id, e.target.value)}
-                      disabled={userRole === 'user'} // Обычный логист не может менять статус
+                      disabled={userRole === 'user'} 
                       sx={{ 
                         fontSize: '0.875rem',
                         fontWeight: 'bold',
-                        bgcolor: incident.status === 'Решен' ? '#e8f5e9' : 
-                                 incident.status === 'В обработке' ? '#fff3e0' : '#ffebee',
-                        color: incident.status === 'Решен' ? 'success.main' : 
-                               incident.status === 'В обработке' ? 'warning.main' : 'error.main'
+                        bgcolor: incident.status === 'Закрыт' ? '#e8f5e9' : 
+                                 incident.status === 'В работе' ? '#fff3e0' : '#ffebee',
+                        color: incident.status === 'Закрыт' ? 'success.main' : 
+                               incident.status === 'В работе' ? 'warning.main' : 'error.main'
                       }}
                     >
                       <MenuItem value="Зафиксирован">Зафиксирован</MenuItem>
-                      <MenuItem value="В обработке">В обработке</MenuItem>
-                      <MenuItem value="Решен">Решен</MenuItem>
+                      <MenuItem value="В работе">В работе</MenuItem>
+                      <MenuItem value="Закрыт">Закрыт</MenuItem>
                     </Select>
                   </FormControl>
                 </TableCell>
@@ -177,7 +186,6 @@ export default function Dashboard() {
                 </TableCell>
                 
                 <TableCell align="center">
-                  {/* УБРАЛИ СТАРЫЕ КНОПКИ СТАТУСА, ОСТАВИЛИ ТОЛЬКО УДАЛЕНИЕ */}
                   {userRole === 'admin' ? (
                     <Button variant="text" color="error" size="small" onClick={() => handleDelete(incident.id)} sx={{ minWidth: 'auto', p: '4px 8px' }}>✕</Button>
                   ) : (
@@ -197,7 +205,7 @@ export default function Dashboard() {
           page={page}
           onPageChange={handleChangePage}
           onRowsPerPageChange={handleChangeRowsPerPage}
-          labelRowsPerPage="Строк на странице:"
+          labelRowsPerPage="Строк:"
           labelDisplayedRows={({ from, to, count }) => `${from}–${to} из ${count !== -1 ? count : `более чем ${to}`}`}
         />
       </TableContainer>

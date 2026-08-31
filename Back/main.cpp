@@ -2,113 +2,77 @@
 #include <pqxx/pqxx>
 #include <iostream>
 #include <string>
+#include <vector>
 #include <jwt-cpp/jwt.h>
 
 using namespace std;
 
-// Данные для подключения к твоему локальному PostgreSQL
 const string DB_CONN = "dbname=logSecure user=postgres password=3462 host=db port=5432";
+const string JWT_SECRET = "super_secret_lab_key_123";
+
+// Вспомогательная функция проверки JWT и роли Admin
+bool verify_admin(const crow::request& req, crow::response& error_res) {
+    string auth_header = req.get_header_value("Authorization");
+    if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") {
+        error_res = crow::response(401, R"({"error": "Не авторизован"})");
+        return false;
+    }
+    try {
+        auto decoded = jwt::decode(auth_header.substr(7));
+        auto verifier = jwt::verify()
+            .allow_algorithm(jwt::algorithm::hs256{JWT_SECRET})
+            .with_issuer("logistics_sec_app");
+        verifier.verify(decoded);
+
+        if (decoded.get_payload_claim("role").as_string() != "admin") {
+            error_res = crow::response(403, R"({"error": "Требуются права администратора"})");
+            return false;
+        }
+        return true;
+    } catch (...) {
+        error_res = crow::response(401, R"({"error": "Недействительный токен"})");
+        return false;
+    }
+}
+
+bool verify_auditor(const crow::request& req, crow::response& error_res) {
+    string auth_header = req.get_header_value("Authorization");
+    if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") {
+        error_res = crow::response(401, R"({"error": "Не авторизован"})");
+        return false;
+    }
+    try {
+        auto decoded = jwt::decode(auth_header.substr(7));
+        auto verifier = jwt::verify()
+            .allow_algorithm(jwt::algorithm::hs256{JWT_SECRET})
+            .with_issuer("logistics_sec_app");
+        verifier.verify(decoded);
+
+        if (decoded.get_payload_claim("role").as_string() != "auditor") {
+            error_res = crow::response(403, R"({"error": "Требуются права аудитора"})");
+            return false;
+        }
+        return true;
+    } catch (...) {
+        error_res = crow::response(401, R"({"error": "Недействительный токен"})");
+        return false;
+    }
+}
+
+
 
 int main() {
-    // Инициализируем приложение с поддержкой CORS (чтобы React не ругался)
     crow::App<crow::CORSHandler> app;
 
-    // Настройка CORS (разрешаем запросы с любого источника)
     auto& cors = app.get_middleware<crow::CORSHandler>();
     cors.global()
         .headers("X-Custom-Header", "Upgrade-Insecure-Requests", "Content-Type", "Authorization")
         .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
         .origin("*");
 
-    // GET: Получение списка инцидентов для дашборда
-    CROW_ROUTE(app, "/api/incidents").methods(crow::HTTPMethod::GET)
-    ([]() {
-        try {
-            pqxx::connection c(DB_CONN);
-            pqxx::work w(c);
-            
-            // Выбираем данные из БД
-            pqxx::result r = w.exec(
-                "SELECT id, description, status, severity_score, created_at FROM incidents ORDER BY created_at DESC"
-            );
-
-            // Формируем JSON ответ с помощью встроенного в Crow инструмента
-            crow::json::wvalue::list jsonArray;
-            for (auto const& row : r) {
-                crow::json::wvalue incident;
-                incident["id"] = row[0].as<int>();
-                incident["description"] = row[1].as<string>();
-                incident["status"] = row[2].as<string>();
-                
-                // Проверка на NULL, так как severity_score вычисляется триггером
-                if (!row[3].is_null()) {
-                    incident["severity_score"] = row[3].as<double>();
-                } else {
-                    incident["severity_score"] = 0;
-                }
-                
-                incident["date"] = row[4].as<string>();
-                jsonArray.push_back(std::move(incident));
-            }
-            
-            return crow::response(crow::json::wvalue(jsonArray));
-        } catch (const exception& e) {
-            cerr << "Ошибка БД: " << e.what() << endl;
-            return crow::response(500, R"({"error": "Внутренняя ошибка сервера"})");
-        }
-    });
-
-    // POST: Добавление нового инцидента с фронтенда
-    CROW_ROUTE(app, "/api/incidents").methods(crow::HTTPMethod::POST)
-    ([](const crow::request& req) {
-        try {
-            // Парсим входящий JSON от React
-            // Парсим входящий JSON от React
-            auto body = crow::json::load(req.body);
-            if (!body) {
-                return crow::response(400, R"({"error": "Неверный формат JSON"})");
-            }
-
-            // Безопасное чтение: если пришла строка, мы приводим её к числу
-            int emp_id = 0;
-            if (body["employeeId"].t() == crow::json::type::Number) {
-                emp_id = body["employeeId"].i();
-            } else if (body["employeeId"].t() == crow::json::type::String) {
-                emp_id = stoi(body["employeeId"].s());
-            }
-
-            int vuln_id = 0;
-            if (body["vulnerabilityId"].t() == crow::json::type::Number) {
-                vuln_id = body["vulnerabilityId"].i();
-            } else if (body["vulnerabilityId"].t() == crow::json::type::String) {
-                vuln_id = stoi(body["vulnerabilityId"].s());
-            }
-
-            string desc = body["description"].s();
-            string status = body["status"].s();
-
-            // Подключаемся к БД и выполняем вставку
-            pqxx::connection c(DB_CONN);
-            pqxx::work w(c);
-            
-            // Защита от SQL-инъекций: используем параметризованный запрос
-            w.exec_params(
-                "INSERT INTO incidents (employee_id, vulnerability_type_id, description, status) VALUES ($1, $2, $3, $4)",
-                emp_id, vuln_id, desc, status
-            );
-            w.commit(); // Сохраняем изменения
-
-            // Уровень угрозы (severity_score) рассчитается сам благодаря триггеру в Postgres!
-            
-            return crow::response(201, R"({"message": "Инцидент успешно добавлен"})");
-
-        } catch (const exception& e) {
-            cerr << "Ошибка при вставке: " << e.what() << endl;
-            return crow::response(500, R"({"error": "Ошибка при сохранении в БД"})");
-        }
-    });
-
-    // POST: Авторизация и выдача JWT
+    // ==========================================
+    // 1. АВТОРИЗАЦИЯ
+    // ==========================================
     CROW_ROUTE(app, "/api/auth/login").methods(crow::HTTPMethod::POST)
     ([](const crow::request& req) {
         try {
@@ -121,217 +85,258 @@ int main() {
             pqxx::connection c(DB_CONN);
             pqxx::work w(c);
 
-            // Магия pgcrypto: функция crypt() сама возьмет соль из хэша в базе и проверит пароль!
             pqxx::result r = w.exec_params(
-                "SELECT id, role FROM employees WHERE username = $1 AND password_hash = crypt($2, password_hash)",
+                "SELECT id, role, firstname, lastname FROM employees WHERE username = $1 AND password_hash = crypt($2, password_hash)",
                 username, password
             );
 
-            // Если строк нет, значит логин или пароль неверные
             if (r.empty()) {
                 return crow::response(401, R"({"error": "Неверный логин или пароль"})");
             }
 
-            // Пользователь найден, вытаскиваем его данные
             int user_id = r[0][0].as<int>();
             string role = r[0][1].as<string>();
+            string fullname = (r[0][2].is_null() ? "" : r[0][2].as<string>()) + " " + 
+                              (r[0][3].is_null() ? "" : r[0][3].as<string>());
 
-            // Генерируем JWT токен
             auto token = jwt::create()
                 .set_issuer("logistics_sec_app")
                 .set_type("JWS")
                 .set_payload_claim("user_id", jwt::claim(std::to_string(user_id)))
                 .set_payload_claim("role", jwt::claim(role))
-                // Токен живет 24 часа
                 .set_expires_at(std::chrono::system_clock::now() + std::chrono::hours(24))
-                // Секретный ключ для подписи (в реальном проекте должен лежать в переменных окружения)
-                .sign(jwt::algorithm::hs256{"super_secret_lab_key_123"});
+                .sign(jwt::algorithm::hs256{JWT_SECRET});
 
-            // Возвращаем токен клиенту в формате JSON
-            crow::json::wvalue response_json;
-            response_json["token"] = token;
-            return crow::response(200, response_json);
+            crow::json::wvalue res;
+            res["token"] = token;
+            res["role"] = role;
+            res["fullname"] = fullname;
+            return crow::response(200, res);
 
         } catch (const exception& e) {
             cerr << "Ошибка авторизации: " << e.what() << endl;
-            return crow::response(500, R"({"error": "Ошибка сервера"})");
+            return crow::response(500, R"({"error": "Внутренняя ошибка сервера"})");
         }
     });
 
-    // PUT: Обновление статуса инцидента
-    CROW_ROUTE(app, "/api/incidents/<int>").methods(crow::HTTPMethod::PUT)
-    ([](const crow::request& req, int incident_id) {
+    // ==========================================
+    // 2. ИНЦИДЕНТЫ (CRUD)
+    // ==========================================
+    
+    // GET: Список всех инцидентов для дашборда
+    CROW_ROUTE(app, "/api/incidents").methods(crow::HTTPMethod::GET)
+    ([]() {
+        try {
+            pqxx::connection c(DB_CONN);
+            pqxx::work w(c);
+
+            pqxx::result r = w.exec(
+                "SELECT i.id, i.cargo_tracking_number, i.description, i.incident_status::text, "
+                "i.severity_score, i.created_at, "
+                "v.name AS vuln_name, s.source_name, "
+                "COALESCE(e.firstname || ' ' || e.lastname, e.username) AS reporter "
+                "FROM incidents i "
+                "LEFT JOIN vulnerability_types v ON i.vulnerability_type_id = v.id "
+                "LEFT JOIN sources s ON i.source_id = s.id "
+                "LEFT JOIN employees e ON i.employee_id = e.id "
+                "ORDER BY i.created_at DESC"
+            );
+
+            crow::json::wvalue::list jsonArray;
+            for (auto const& row : r) {
+                crow::json::wvalue inc;
+                inc["id"] = row[0].as<int>();
+                inc["tracking_number"] = row[1].is_null() ? "-" : row[1].as<string>();
+                inc["description"] = row[2].as<string>();
+                inc["status"] = row[3].as<string>();
+                inc["severity_score"] = row[4].is_null() ? 0.0 : row[4].as<double>();
+                inc["date"] = row[5].as<string>();
+                inc["vulnerability"] = row[6].is_null() ? "Не указано" : row[6].as<string>();
+                inc["source"] = row[7].is_null() ? "Не указан" : row[7].as<string>();
+                inc["reporter"] = row[8].is_null() ? "Система" : row[8].as<string>();
+
+                jsonArray.push_back(std::move(inc));
+            }
+
+            return crow::response(200, crow::json::wvalue(jsonArray));
+        } catch (const exception& e) {
+            cerr << "Ошибка GET /api/incidents: " << e.what() << endl;
+            return crow::response(500, R"({"error": "Ошибка получения инцидентов"})");
+        }
+    });
+
+    // POST: Создание инцидента с мерами и источником
+    CROW_ROUTE(app, "/api/incidents").methods(crow::HTTPMethod::POST)
+    ([](const crow::request& req) {
         try {
             auto body = crow::json::load(req.body);
             if (!body) return crow::response(400, R"({"error": "Неверный формат JSON"})");
 
-            string new_status = body["status"].s();
+            int emp_id = body.has("employeeId") ? (body["employeeId"].t() == crow::json::type::Number ? body["employeeId"].i() : stoi(body["employeeId"].s())) : 1;
+            int vuln_id = body.has("vulnerabilityId") ? (body["vulnerabilityId"].t() == crow::json::type::Number ? body["vulnerabilityId"].i() : stoi(body["vulnerabilityId"].s())) : 1;
+            int source_id = body.has("sourceId") ? (body["sourceId"].t() == crow::json::type::Number ? body["sourceId"].i() : stoi(body["sourceId"].s())) : 1;
+            
+            string tracking_number = "";
+	    if (body.has("trackingNumber")) {
+    		tracking_number = body["trackingNumber"].s();
+	    }
+            string desc = body["description"].s();
+            string status = "Зафиксирован";
+	    if (body.has("status")) {
+	        status = body["status"].s();
+	    }
 
             pqxx::connection c(DB_CONN);
             pqxx::work w(c);
 
-            // Обновляем статус инцидента по его ID
+            // Вставляем инцидент и возвращаем сгенерированный ID
             pqxx::result r = w.exec_params(
-                "UPDATE incidents SET status = $1 WHERE id = $2 RETURNING id",
-                new_status, incident_id
+                "INSERT INTO incidents (employee_id, vulnerability_type_id, source_id, cargo_tracking_number, description, incident_status) "
+                "VALUES ($1, $2, $3, $4, $5, $6::status) RETURNING id",
+                emp_id, vuln_id, source_id, tracking_number, desc, status
             );
+            int new_incident_id = r[0][0].as<int>();
 
-            // Если ничего не вернулось, значит инцидента с таким ID нет
-            if (r.empty()) {
-                return crow::response(404, R"({"error": "Инцидент не найден"})");
+            // Если переданы связанные меры (массив measureIds)
+            if (body.has("measureIds")) {
+                for (const auto& m_val : body["measureIds"]) {
+                    int m_id = (m_val.t() == crow::json::type::Number) ? m_val.i() : stoi(m_val.s());
+                    w.exec_params(
+                        "INSERT INTO incident_measures (incident_id, measure_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        new_incident_id, m_id
+                    );
+                }
             }
 
             w.commit();
-            return crow::response(200, R"({"message": "Статус успешно обновлен"})");
+            crow::json::wvalue res;
+            res["message"] = "Инцидент успешно создан";
+            res["id"] = new_incident_id;
+            return crow::response(201, res);
 
         } catch (const exception& e) {
-            cerr << "Ошибка обновления: " << e.what() << endl;
-            return crow::response(500, R"({"error": "Ошибка при обновлении в БД"})");
+            cerr << "Ошибка POST /api/incidents: " << e.what() << endl;
+            return crow::response(500, R"({"error": "Ошибка при создании записи"})");
         }
     });
 
-    // GET: Получение подробной информации об одном инциденте
+    // GET: Подробности инцидента по ID
     CROW_ROUTE(app, "/api/incidents/<int>").methods(crow::HTTPMethod::GET)
     ([](int incident_id) {
         try {
             pqxx::connection c(DB_CONN);
             pqxx::work w(c);
-            
-            // Используем JOIN, чтобы подтянуть данные из других таблиц (сотрудники и уязвимости)
+
             pqxx::result r = w.exec_params(
-                "SELECT i.id, i.description, i.status, i.severity_score, i.created_at, "
-                "e.username, v.name AS vuln_name, v.base_risk_score "
+                "SELECT i.id, i.cargo_tracking_number, i.description, i.incident_status::text, i.severity_score, i.created_at, "
+                "e.username, v.name, s.source_name "
                 "FROM incidents i "
                 "LEFT JOIN employees e ON i.employee_id = e.id "
                 "LEFT JOIN vulnerability_types v ON i.vulnerability_type_id = v.id "
+                "LEFT JOIN sources s ON i.source_id = s.id "
                 "WHERE i.id = $1",
                 incident_id
             );
 
-            if (r.empty()) {
-                return crow::response(404, R"({"error": "Инцидент не найден"})");
-            }
+            if (r.empty()) return crow::response(404, R"({"error": "Инцидент не найден"})");
 
             auto row = r[0];
-            crow::json::wvalue incident;
-            incident["id"] = row[0].as<int>();
-            incident["description"] = row[1].as<string>();
-            incident["status"] = row[2].as<string>();
-            incident["severity_score"] = row[3].is_null() ? 0 : row[3].as<double>();
-            incident["date"] = row[4].as<string>();
-            
-            // Данные из связанных таблиц
-            incident["employee_username"] = row[5].is_null() ? "Неизвестно" : row[5].as<string>();
-            incident["vulnerability_name"] = row[6].is_null() ? "Неизвестно" : row[6].as<string>();
-            incident["base_risk_score"] = row[7].is_null() ? 0 : row[7].as<int>();
+            crow::json::wvalue inc;
+            inc["id"] = row[0].as<int>();
+            inc["tracking_number"] = row[1].is_null() ? "" : row[1].as<string>();
+            inc["description"] = row[2].as<string>();
+            inc["status"] = row[3].as<string>();
+            inc["severity_score"] = row[4].is_null() ? 0.0 : row[4].as<double>();
+            inc["date"] = row[5].as<string>();
+            inc["reporter"] = row[6].is_null() ? "Система" : row[6].as<string>();
+            inc["vulnerability"] = row[7].is_null() ? "" : row[7].as<string>();
+            inc["source"] = row[8].is_null() ? "" : row[8].as<string>();
 
-            return crow::response(incident);
+            // Подтягиваем список принятых мер
+            pqxx::result r_measures = w.exec_params(
+                "SELECT m.id, m.measure_name FROM measures m "
+                "JOIN incident_measures im ON m.id = im.measure_id "
+                "WHERE im.incident_id = $1",
+                incident_id
+            );
 
+            crow::json::wvalue::list measures_list;
+            for (auto const& m_row : r_measures) {
+                crow::json::wvalue m;
+                m["id"] = m_row[0].as<int>();
+                m["name"] = m_row[1].as<string>();
+                measures_list.push_back(std::move(m));
+            }
+            inc["measures"] = std::move(measures_list);
+
+            return crow::response(200, inc);
         } catch (const exception& e) {
-            cerr << "Ошибка БД (получение инцидента): " << e.what() << endl;
-            return crow::response(500, R"({"error": "Внутренняя ошибка сервера"})");
+            return crow::response(500, R"({"error": "Ошибка базы данных"})");
         }
     });
 
-    // DELETE: Удаление инцидента (Только для Администратора)
+    // PUT: Смена статуса
+    CROW_ROUTE(app, "/api/incidents/<int>").methods(crow::HTTPMethod::PUT)
+    ([](const crow::request& req, int incident_id) {
+        crow::response err_res;
+        if (!verify_admin(req, err_res) && !verify_auditor(req, err_res)) return err_res;
+
+        try {
+            auto body = crow::json::load(req.body);
+            pqxx::connection c(DB_CONN);
+            pqxx::work w(c);
+  
+            if (body.has("status")) {
+                string status = body["status"].s();
+                w.exec_params("UPDATE incidents SET status = $1 WHERE id = $2", status, incident_id);
+            }
+        
+            if (body.has("description")) {
+                string description = body["description"].s();
+                w.exec_params("UPDATE incidents SET description = $1 WHERE id = $2", description, incident_id);
+            } 
+
+            if (body.has("measureIds")) {
+                // Сначала удаляем старые привязки мер к инциденту
+                w.exec_params("DELETE FROM incident_measures WHERE incident_id = $1", incident_id);
+                // Добавляем новые
+                for (const auto& measure : body["measureIds"]) {
+                    w.exec_params("INSERT INTO incident_measures (incident_id, measure_id) VALUES ($1, $2)", incident_id, measure.i());
+                } 
+            }
+
+            w.commit();
+            return crow::response(200, R"({"message": "Инцидент обновлен"})");
+        } catch (...) {
+            return crow::response(500, R"({"error": "Ошибка при обновлении инцидента в БД"})");
+        }
+    });
+    // DELETE: Удаление инцидента (Admin only)
     CROW_ROUTE(app, "/api/incidents/<int>").methods(crow::HTTPMethod::DELETE)
     ([](const crow::request& req, int incident_id) {
-        // 1. Проверяем наличие заголовка Authorization
-        string auth_header = req.get_header_value("Authorization");
-        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") {
-            return crow::response(401, R"({"error": "Не авторизован"})");
-        }
-
-        string token = auth_header.substr(7);
+        crow::response err_res;
+        if (!verify_admin(req, err_res)) return err_res;
 
         try {
-            // 2. Расшифровываем и проверяем криптографическую подпись токена
-            auto decoded = jwt::decode(token);
-            auto verifier = jwt::verify()
-                .allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}) // Тот же ключ, что и при логине!
-                .with_issuer("logistics_sec_app");
-            verifier.verify(decoded);
-
-            // 3. Вытаскиваем роль и проверяем права
-            string role = decoded.get_payload_claim("role").as_string();
-            if (role != "admin") {
-                return crow::response(403, R"({"error": "Доступ запрещен. Требуются права администратора."})");
-            }
-
-            // 4. Если всё ок — удаляем из БД
             pqxx::connection c(DB_CONN);
             pqxx::work w(c);
-
             pqxx::result r = w.exec_params("DELETE FROM incidents WHERE id = $1 RETURNING id", incident_id);
-            if (r.empty()) {
-                crow::json::wvalue err;
-                err["error"] = "Инцидент не найден";
-                return crow::response(404, err);
-            }
+            if (r.empty()) return crow::response(404, R"({"error": "Инцидент не найден"})");
 
             w.commit();
-            crow::json::wvalue res;
-            res["message"] = "Инцидент успешно удален";
-            return crow::response(200, res);
-
-        } catch (const std::exception& e) {
-            cerr << "Ошибка проверки токена: " << e.what() << endl;
-            return crow::response(401, R"({"error": "Недействительный токен"})");
+            return crow::response(200, R"({"message": "Инцидент успешно удален"})");
+        } catch (const exception& e) {
+            return crow::response(500, R"({"error": "Ошибка БД"})");
         }
     });
 
-    // POST: Создание нового пользователя (Только для Администратора)
-    CROW_ROUTE(app, "/api/users").methods(crow::HTTPMethod::POST)
-    ([](const crow::request& req) {
-        string auth_header = req.get_header_value("Authorization");
-        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") {
-            crow::json::wvalue err; err["error"] = "Не авторизован";
-            return crow::response(401, err);
-        }
-        try {
-            auto decoded = jwt::decode(auth_header.substr(7));
-            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
-            verifier.verify(decoded);
-            if (decoded.get_payload_claim("role").as_string() != "admin") {
-                crow::json::wvalue err; err["error"] = "Требуются права администратора";
-                return crow::response(403, err);
-            }
+     // ==========================================
+    // 3. СПРАВОЧНИКИ (Источники, Меры, Уязвимости)
+    // ==========================================
 
-            auto body = crow::json::load(req.body);
-            if (!body) {
-                crow::json::wvalue err; err["error"] = "Неверный JSON";
-                return crow::response(400, err);
-            }
-
-            // УДАЛИЛИ ПАРСИНГ ID
-            string username = body["username"].s();
-            string password = body["password"].s();
-            string role = body["role"].s();
-
-            pqxx::connection c(DB_CONN);
-            pqxx::work w(c);
-            
-            // УДАЛИЛИ ID ИЗ ЗАПРОСА И ПАРАМЕТРОВ
-            w.exec_params(
-                "INSERT INTO employees (username, password_hash, role) VALUES ($1, crypt($2, gen_salt('bf')), $3)",
-                username, password, role
-            );
-            w.commit();
-
-            crow::json::wvalue res; res["message"] = "Пользователь создан";
-            return crow::response(201, res);
-        } catch (const std::exception& e) {
-            cerr << "Ошибка: " << e.what() << endl;
-            crow::json::wvalue err; err["error"] = "Ошибка БД";
-            return crow::response(500, err);
-        }
-    });
-
-    // GET и POST: Работа с уязвимостями (Объединенный роут)
+    // GET / POST: Уязвимости
     CROW_ROUTE(app, "/api/vulnerabilities").methods(crow::HTTPMethod::GET, crow::HTTPMethod::POST)
     ([](const crow::request& req) {
-        
-        // --- ЕСЛИ ЭТО GET-ЗАПРОС (Загрузка списка для формы) ---
         if (req.method == crow::HTTPMethod::GET) {
             try {
                 pqxx::connection c(DB_CONN);
@@ -347,71 +352,44 @@ int main() {
                     vuln_list.push_back(std::move(v));
                 }
                 return crow::response(200, crow::json::wvalue(vuln_list));
-            } catch (const std::exception& e) {
-                std::cerr << "Ошибка БД (GET уязвимости): " << e.what() << std::endl;
-                crow::json::wvalue err; err["error"] = "Ошибка БД";
-                return crow::response(500, err);
+            } catch (...) {
+                return crow::response(500, R"({"error": "Ошибка БД"})");
             }
-        } 
-        
-        // --- ЕСЛИ ЭТО POST-ЗАПРОС (Добавление новой уязвимости Админом) ---
-        else {
-            string auth_header = req.get_header_value("Authorization");
-            if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") {
-                crow::json::wvalue err; err["error"] = "Не авторизован";
-                return crow::response(401, err);
-            }
+        } else {
+            crow::response err_res;
+            if (!verify_admin(req, err_res)) return err_res;
+
             try {
-                auto decoded = jwt::decode(auth_header.substr(7));
-                auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
-                verifier.verify(decoded);
-                
-                if (decoded.get_payload_claim("role").as_string() != "admin") {
-                    crow::json::wvalue err; err["error"] = "Требуются права администратора";
-                    return crow::response(403, err);
-                }
-
                 auto body = crow::json::load(req.body);
-                if (!body) {
-                    crow::json::wvalue err; err["error"] = "Неверный JSON";
-                    return crow::response(400, err);
-                }
+                if (!body) return crow::response(400, R"({"error": "Неверный JSON"})");
 
-                // УДАЛИЛИ ПАРСИНГ ID
                 string name = body["name"].s();
                 int base_risk = body["base_risk_score"].i();
 
                 pqxx::connection c(DB_CONN);
                 pqxx::work w(c);
-                
-                // УДАЛИЛИ ID ИЗ ЗАПРОСА И ПАРАМЕТРОВ
                 w.exec_params("INSERT INTO vulnerability_types (name, base_risk_score) VALUES ($1, $2)", name, base_risk);
                 w.commit();
 
-                crow::json::wvalue res; res["message"] = "Уязвимость добавлена";
-                return crow::response(201, res);
-            } catch (const std::exception& e) {
-                std::cerr << "Ошибка БД (POST уязвимости): " << e.what() << std::endl;
-                crow::json::wvalue err; err["error"] = "Ошибка БД";
-                return crow::response(500, err);
+                return crow::response(201, R"({"message": "Уязвимость добавлена"})");
+            } catch (...) {
+                return crow::response(500, R"({"error": "Ошибка БД"})");
             }
         }
     });
 
-    // GET: Получение списка пользователей (Только для Админа)
+    // ==========================================
+    // 4. ПОЛЬЗОВАТЕЛИ (Admin only)
+    // ==========================================
     CROW_ROUTE(app, "/api/users").methods(crow::HTTPMethod::GET)
     ([](const crow::request& req) {
-        string auth_header = req.get_header_value("Authorization");
-        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") return crow::response(401, R"({"error": "Не авторизован"})");
-        try {
-            auto decoded = jwt::decode(auth_header.substr(7));
-            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
-            verifier.verify(decoded);
-            if (decoded.get_payload_claim("role").as_string() != "admin") return crow::response(403, R"({"error": "Требуются права администратора"})");
+        crow::response err_res;
+        if (!verify_admin(req, err_res)) return err_res;
 
+        try {
             pqxx::connection c(DB_CONN);
             pqxx::work w(c);
-            pqxx::result r = w.exec("SELECT id, username, role FROM employees ORDER BY id ASC");
+            pqxx::result r = w.exec("SELECT id, username, role, firstname, lastname, job_title, contact_email FROM employees ORDER BY id ASC");
             
             crow::json::wvalue::list user_list;
             for (auto const& row : r) {
@@ -419,60 +397,107 @@ int main() {
                 u["id"] = row[0].as<int>();
                 u["username"] = row[1].as<string>();
                 u["role"] = row[2].as<string>();
+                u["firstname"] = row[3].is_null() ? "" : row[3].as<string>();
+                u["lastname"] = row[4].is_null() ? "" : row[4].as<string>();
+                u["job_title"] = row[5].is_null() ? "" : row[5].as<string>();
+                u["contact_email"] = row[6].is_null() ? "" : row[6].as<string>();
                 user_list.push_back(std::move(u));
             }
             return crow::response(200, crow::json::wvalue(user_list));
-        } catch (const std::exception& e) {
+        } catch (...) {
             return crow::response(500, R"({"error": "Ошибка БД"})");
         }
     });
-
-    // DELETE: Удаление пользователя (Только для Админа)
-    CROW_ROUTE(app, "/api/users/<int>").methods(crow::HTTPMethod::DELETE)
-    ([](const crow::request& req, int user_id) {
-        string auth_header = req.get_header_value("Authorization");
-        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") return crow::response(401, R"({"error": "Не авторизован"})");
-        try {
-            auto decoded = jwt::decode(auth_header.substr(7));
-            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
-            verifier.verify(decoded);
-            if (decoded.get_payload_claim("role").as_string() != "admin") return crow::response(403, R"({"error": "Требуются права администратора"})");
-
-            pqxx::connection c(DB_CONN);
-            pqxx::work w(c);
-            pqxx::result r = w.exec_params("DELETE FROM employees WHERE id = $1 RETURNING id", user_id);
-            if (r.empty()) return crow::response(404, R"({"error": "Сотрудник не найден"})");
-            w.commit();
-            return crow::response(200, R"({"message": "Сотрудник удален"})");
-        } catch (const std::exception& e) {
-            // Если БД ругается на Foreign Key (сотрудник уже создал инцидент)
-            return crow::response(400, R"({"error": "Нельзя удалить сотрудника, за которым числятся инциденты"})");
+    // ==========================================
+    // ИСТОЧНИКИ (GET / POST)
+    // ==========================================
+    CROW_ROUTE(app, "/api/sources").methods(crow::HTTPMethod::GET, crow::HTTPMethod::POST)
+    ([](const crow::request& req) {
+        if (req.method == crow::HTTPMethod::GET) {
+            try {
+                pqxx::connection c(DB_CONN);
+                pqxx::work w(c);
+                pqxx::result r = w.exec("SELECT id, source_name FROM sources ORDER BY id ASC");
+                crow::json::wvalue::list list;
+                for (auto const& row : r) {
+                    crow::json::wvalue s;
+                    s["id"] = row[0].as<int>();
+                    s["name"] = row[1].as<string>();
+                    list.push_back(std::move(s));
+                }
+                return crow::response(200, crow::json::wvalue(list));
+            } catch (...) { return crow::response(500, R"({"error": "Ошибка БД"})"); }
+        } else {
+            crow::response err_res;
+            if (!verify_admin(req, err_res)) return err_res;
+            try {
+                auto body = crow::json::load(req.body);
+                pqxx::connection c(DB_CONN);
+                pqxx::work w(c);
+                string source_name = body["name"].s();
+                w.exec_params("INSERT INTO sources (source_name) VALUES ($1)", source_name);
+                w.commit();
+                return crow::response(201, R"({"message": "Источник добавлен"})");
+            } catch (...) { return crow::response(500, R"({"error": "Ошибка БД"})"); }
         }
     });
 
-    // DELETE: Удаление уязвимости (Только для Админа)
-    CROW_ROUTE(app, "/api/vulnerabilities/<int>").methods(crow::HTTPMethod::DELETE)
-    ([](const crow::request& req, int vuln_id) {
-        string auth_header = req.get_header_value("Authorization");
-        if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") return crow::response(401, R"({"error": "Не авторизован"})");
+    CROW_ROUTE(app, "/api/sources/<int>").methods(crow::HTTPMethod::DELETE)
+    ([](const crow::request& req, int source_id) {
+        crow::response err_res;
+        if (!verify_admin(req, err_res)) return err_res;
         try {
-            auto decoded = jwt::decode(auth_header.substr(7));
-            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::hs256{"super_secret_lab_key_123"}).with_issuer("logistics_sec_app");
-            verifier.verify(decoded);
-            if (decoded.get_payload_claim("role").as_string() != "admin") return crow::response(403, R"({"error": "Требуются права администратора"})");
+            pqxx::connection c(DB_CONN); pqxx::work w(c);
+            w.exec_params("DELETE FROM sources WHERE id = $1", source_id); w.commit();
+            return crow::response(200, R"({"message": "Источник удален"})");
+        } catch (...) { return crow::response(400, R"({"error": "Нельзя удалить используемый источник"})"); }
+    });
 
-            pqxx::connection c(DB_CONN);
-            pqxx::work w(c);
-            pqxx::result r = w.exec_params("DELETE FROM vulnerability_types WHERE id = $1 RETURNING id", vuln_id);
-            if (r.empty()) return crow::response(404, R"({"error": "Уязвимость не найдена"})");
-            w.commit();
-            return crow::response(200, R"({"message": "Уязвимость удалена"})");
-        } catch (const std::exception& e) {
-            return crow::response(400, R"({"error": "Нельзя удалить уязвимость, которая используется в инцидентах"})");
+    // ==========================================
+    // МЕРЫ (GET / POST)
+    // ==========================================
+    CROW_ROUTE(app, "/api/measures").methods(crow::HTTPMethod::GET, crow::HTTPMethod::POST)
+    ([](const crow::request& req) {
+        if (req.method == crow::HTTPMethod::GET) {
+            try {
+                pqxx::connection c(DB_CONN);
+                pqxx::work w(c);
+                pqxx::result r = w.exec("SELECT id, measure_name FROM measures ORDER BY id ASC");
+                crow::json::wvalue::list list;
+                for (auto const& row : r) {
+                    crow::json::wvalue m;
+                    m["id"] = row[0].as<int>();
+                    m["name"] = row[1].as<string>();
+                    list.push_back(std::move(m));
+                }
+                return crow::response(200, crow::json::wvalue(list));
+            } catch (...) { return crow::response(500, R"({"error": "Ошибка БД"})"); }
+        } else {
+            crow::response err_res;
+            if (!verify_admin(req, err_res)) return err_res;
+            try {
+                auto body = crow::json::load(req.body);
+                pqxx::connection c(DB_CONN);
+                pqxx::work w(c);
+                string measure_name = body["name"].s();
+		w.exec_params("INSERT INTO measures (measure_name) VALUES ($1)", measure_name);
+                w.commit();
+                return crow::response(201, R"({"message": "Мера добавлена"})");
+            } catch (...) { return crow::response(500, R"({"error": "Ошибка БД"})"); }
         }
     });
 
-
+    CROW_ROUTE(app, "/api/measures/<int>").methods(crow::HTTPMethod::DELETE)
+    ([](const crow::request& req, int measure_id) {
+        crow::response err_res;
+        if (!verify_admin(req, err_res)) return err_res;
+        try {
+            pqxx::connection c(DB_CONN); pqxx::work w(c);
+            w.exec_params("DELETE FROM measures WHERE id = $1", measure_id); w.commit();
+            return crow::response(200, R"({"message": "Мера удалена"})");
+        } catch (...) { return crow::response(400, R"({"error": "Нельзя удалить используемую меру"})"); }
+    });
+    
     cout << "Crow сервер запущен на http://localhost:8080" << endl;
     app.port(8080).multithreaded().run();
 }
